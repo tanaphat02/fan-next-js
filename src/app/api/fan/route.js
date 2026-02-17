@@ -1,107 +1,106 @@
-import { hasApiKeyConfigured, isAuthenticatedRequest } from "@/lib/auth";
-import { applySchedule, ensureSchedulerStarted, getFanState, setFanState } from "@/lib/fan-control";
+import mqtt from "mqtt";
 
 export const runtime = "nodejs";
-const BACKEND_BASE_URL = String(process.env.FAN_BACKEND_URL || "http://localhost:4000")
-  .trim()
-  .replace(/\/+$/, "");
 
-function unauthorized(msg = "Unauthorized") {
-  return Response.json({ ok: false, message: msg }, { status: 401 });
+const MQTT_CONTROL_TOPIC = String(process.env.MQTT_CONTROL_TOPIC || "fan/control").trim();
+const COMMANDS = new Set(["ON", "OFF", "TOGGLE"]);
+const CONNECT_TIMEOUT_MS = 10000;
+const OPERATION_TIMEOUT_MS = 12000;
+
+function readConfig() {
+  return {
+    url: String(process.env.MQTT_URL || "").trim(),
+    username: String(process.env.MQTT_USER || "").trim(),
+    password: String(process.env.MQTT_PASS || "").trim(),
+  };
 }
 
-function badGateway(msg = "Unable to reach fan backend") {
-  return Response.json({ ok: false, message: msg }, { status: 502 });
-}
-
-function normalizeBackendState(payload) {
-  const value = String(payload?.relay || payload?.status || "").trim().toLowerCase();
-  if (value === "on" || value === "off") {
-    return value;
-  }
-
-  const rawText = String(payload?.raw || "").trim().toLowerCase();
-  if (rawText.includes("relay=on")) {
-    return "on";
-  }
-
-  if (rawText.includes("relay=off")) {
-    return "off";
-  }
-
-  return "";
-}
-
-async function pushFanStateToBackend(state) {
-  const endpoint = state === "on" ? "on" : "off";
-  const response = await fetch(`${BACKEND_BASE_URL}/api/fan/${endpoint}`, {
-    method: "POST",
-    cache: "no-store",
-  });
-  const payload = await response.json().catch(() => ({}));
-
-  if (!response.ok) {
-    throw new Error(payload.error || payload.message || `Fan backend error (${response.status})`);
-  }
-
-  const normalizedStatus = normalizeBackendState(payload);
-  if (normalizedStatus === "on" || normalizedStatus === "off") {
-    return normalizedStatus;
-  }
-
-  return endpoint;
-}
-
-async function fetchFanStateFromBackend() {
-  const response = await fetch(`${BACKEND_BASE_URL}/api/fan/status`, {
-    method: "GET",
-    cache: "no-store",
-  });
-  const payload = await response.json().catch(() => ({}));
-
-  if (!response.ok) {
-    throw new Error(payload.error || payload.message || `Fan backend error (${response.status})`);
-  }
-
-  const normalizedStatus = normalizeBackendState(payload);
-  if (normalizedStatus === "on" || normalizedStatus === "off") {
-    return normalizedStatus;
-  }
-
-  throw new Error("Fan backend returned unknown status payload");
+function missingEnvResponse() {
+  return Response.json(
+    {
+      ok: false,
+      message: "Server missing MQTT_URL, MQTT_USER, or MQTT_PASS",
+    },
+    { status: 500 },
+  );
 }
 
 export async function POST(req) {
   const body = await req.json().catch(() => ({}));
-  if (!hasApiKeyConfigured()) return unauthorized("Server missing FAN_API_KEY");
+  const command = String(body.cmd || "").trim().toUpperCase();
 
-  if (!isAuthenticatedRequest(req, body.key || "")) {
-    return unauthorized("Please login first");
+  if (!COMMANDS.has(command)) {
+    return Response.json(
+      {
+        ok: false,
+        message: "Invalid cmd. Use ON, OFF, or TOGGLE.",
+      },
+      { status: 400 },
+    );
   }
 
-  ensureSchedulerStarted();
-  applySchedule();
-
-  try {
-    const requestedState = body.state === "on" ? "on" : "off";
-    const backendState = await pushFanStateToBackend(requestedState);
-    return Response.json({ ok: true, state: setFanState(backendState, "manual") });
-  } catch (error) {
-    return badGateway(error instanceof Error ? error.message : "Unable to reach fan backend");
+  const { url, username, password } = readConfig();
+  if (!url || !username || !password) {
+    return missingEnvResponse();
   }
+
+  return new Promise((resolve) => {
+    const client = mqtt.connect(url, {
+      username,
+      password,
+      reconnectPeriod: 0,
+      connectTimeout: CONNECT_TIMEOUT_MS,
+      clean: true,
+    });
+
+    let settled = false;
+
+    const finalize = (status, payload, forceClose = false) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(opTimer);
+      client.end(forceClose);
+      resolve(Response.json(payload, { status }));
+    };
+
+    const opTimer = setTimeout(() => {
+      finalize(504, { ok: false, message: "MQTT publish timeout" }, true);
+    }, OPERATION_TIMEOUT_MS);
+
+    client.on("connect", () => {
+      client.publish(MQTT_CONTROL_TOPIC, command, { qos: 1 }, (error) => {
+        if (error) {
+          finalize(502, { ok: false, message: `Publish failed: ${error.message}` }, true);
+          return;
+        }
+
+        finalize(200, {
+          ok: true,
+          cmd: command,
+          topic: MQTT_CONTROL_TOPIC,
+        });
+      });
+    });
+
+    client.on("error", (error) => {
+      finalize(502, {
+        ok: false,
+        message: `MQTT connection error: ${error.message || String(error)}`,
+      }, true);
+    });
+  });
 }
 
-export async function GET(req) {
-  if (!hasApiKeyConfigured()) return unauthorized("Server missing FAN_API_KEY");
-  if (!isAuthenticatedRequest(req)) return unauthorized("Please login first");
-
-  ensureSchedulerStarted();
-  applySchedule();
-
-  try {
-    const backendState = await fetchFanStateFromBackend();
-    return Response.json({ ok: true, state: setFanState(backendState, "backend:status") });
-  } catch (error) {
-    return badGateway(error instanceof Error ? error.message : "Unable to reach fan backend");
+export async function GET() {
+  const { url, username, password } = readConfig();
+  if (!url || !username || !password) {
+    return missingEnvResponse();
   }
+
+  return Response.json({
+    ok: true,
+    controlTopic: MQTT_CONTROL_TOPIC,
+  });
 }
