@@ -12,6 +12,7 @@ export default function Page() {
               <h1>Fan MQTT Control Desk</h1>
             </div>
           </div>
+          <p className="bank-session-note">Touch-first layout, optimized for iPhone SE2</p>
         </header>
 
         <FanPanel />

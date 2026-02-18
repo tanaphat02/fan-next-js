@@ -5,10 +5,33 @@ import mqtt from "mqtt";
 
 const MQTT_STATUS_TOPIC = String(process.env.NEXT_PUBLIC_MQTT_STATUS_TOPIC || "fan/status").trim();
 const MQTT_LWT_TOPIC = String(process.env.NEXT_PUBLIC_MQTT_LWT_TOPIC || "fan/lwt").trim();
+const HEALTHY_BROKER_STATES = new Set(["CONNECTED"]);
 
 function normalizeLabel(value, fallback = "UNKNOWN") {
   const text = String(value || "").trim();
   return text ? text.toUpperCase() : fallback;
+}
+
+function toFanStateClass(value) {
+  if (value === "ON") return "is-on";
+  if (value === "OFF") return "is-off";
+  return "is-unknown";
+}
+
+function toChipClass(value, kind) {
+  if (kind === "broker") {
+    if (HEALTHY_BROKER_STATES.has(value)) return "is-good";
+    if (value === "CONNECTING" || value === "RECONNECTING") return "is-warn";
+    return "is-bad";
+  }
+
+  if (kind === "device") {
+    if (value === "ONLINE" || value === "ON") return "is-good";
+    if (value === "OFFLINE" || value === "OFF") return "is-bad";
+    return "is-idle";
+  }
+
+  return "is-idle";
 }
 
 export default function FanPanel() {
@@ -99,34 +122,78 @@ export default function FanPanel() {
     }
   }
 
+  const fanStateClass = toFanStateClass(fanStatus);
+  const brokerClass = toChipClass(brokerState, "broker");
+  const deviceClass = toChipClass(deviceStatus, "device");
+
   return (
-    <section style={{ display: "grid", gap: 12, maxWidth: 440 }}>
-      <h1 style={{ margin: 0 }}>Fan MQTT Panel</h1>
-      <div>
-        Broker: <b>{brokerState}</b>
-      </div>
-      <div>
-        Device (LWT): <b>{deviceStatus}</b>
-      </div>
-      <div>
-        Fan Status: <b>{fanStatus}</b>
-      </div>
+    <section className="bank-grid">
+      <article className="bank-panel">
+        <p className="bank-panel-kicker">Live Telemetry</p>
+        <div className="bank-status-head">
+          <div>
+            <h2>Fan Overview</h2>
+            <p className="bank-panel-copy bank-panel-copy--tight">
+              Real-time MQTT broker status with current device heartbeat.
+            </p>
+          </div>
+          <span className={`bank-state-pill ${fanStateClass}`}>{fanStatus}</span>
+        </div>
 
-      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-        <button type="button" onClick={() => sendCommand("ON")} disabled={working}>
-          ON
-        </button>
-        <button type="button" onClick={() => sendCommand("OFF")} disabled={working}>
-          OFF
-        </button>
-        <button type="button" onClick={() => sendCommand("TOGGLE")} disabled={working}>
-          TOGGLE
-        </button>
-      </div>
+        <div className="bank-status-grid">
+          <div className="bank-stat-item">
+            <span className="bank-stat-label">Broker</span>
+            <span className={`bank-chip ${brokerClass}`}>{brokerState}</span>
+          </div>
+          <div className="bank-stat-item">
+            <span className="bank-stat-label">Device (LWT)</span>
+            <span className={`bank-chip ${deviceClass}`}>{deviceStatus}</span>
+          </div>
+        </div>
 
-      <p style={{ minHeight: 20, margin: 0 }} aria-live="polite">
-        {message}
-      </p>
+        <p className="bank-panel-copy bank-panel-copy--summary bank-topic-line">
+          Topics: <code>{MQTT_STATUS_TOPIC}</code> / <code>{MQTT_LWT_TOPIC}</code>
+        </p>
+      </article>
+
+      <article className="bank-panel">
+        <p className="bank-panel-kicker">Quick Control</p>
+        <h2>Command Center</h2>
+        <p className="bank-panel-copy">
+          Large touch targets for quick actions, including small screens like iPhone SE2.
+        </p>
+
+        <div className="bank-actions bank-actions--triple">
+          <button
+            type="button"
+            className="bank-button bank-button--on"
+            onClick={() => sendCommand("ON")}
+            disabled={working}
+          >
+            Turn ON
+          </button>
+          <button
+            type="button"
+            className="bank-button bank-button--off"
+            onClick={() => sendCommand("OFF")}
+            disabled={working}
+          >
+            Turn OFF
+          </button>
+          <button
+            type="button"
+            className="bank-button bank-button--primary"
+            onClick={() => sendCommand("TOGGLE")}
+            disabled={working}
+          >
+            Toggle
+          </button>
+        </div>
+
+        <p className={`bank-message ${message ? "is-visible" : ""}`} aria-live="polite" role="status">
+          {message || (working ? "Sending command..." : "Ready")}
+        </p>
+      </article>
     </section>
   );
 }
