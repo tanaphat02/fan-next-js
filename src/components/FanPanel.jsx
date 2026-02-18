@@ -37,14 +37,53 @@ function toChipClass(value, kind) {
 export default function FanPanel() {
   const [fanStatus, setFanStatus] = useState("UNKNOWN");
   const [deviceStatus, setDeviceStatus] = useState("UNKNOWN");
-  const [brokerState, setBrokerState] = useState("CONNECTING");
+  const [brokerState, setBrokerState] = useState("LOCKED");
   const [working, setWorking] = useState(false);
   const [message, setMessage] = useState("");
+  const [sessionReady, setSessionReady] = useState(false);
+  const [authenticated, setAuthenticated] = useState(false);
+  const [authKey, setAuthKey] = useState("");
+  const [authWorking, setAuthWorking] = useState(false);
+  const [authMessage, setAuthMessage] = useState("");
 
   useEffect(() => {
+    let mounted = true;
+
+    async function checkSession() {
+      try {
+        const response = await fetch("/api/auth/session", {
+          method: "GET",
+          cache: "no-store",
+        });
+        const data = await response.json().catch(() => ({}));
+        if (!mounted) return;
+        setAuthenticated(Boolean(data.authenticated));
+      } catch {
+        if (!mounted) return;
+        setAuthenticated(false);
+      } finally {
+        if (mounted) {
+          setSessionReady(true);
+        }
+      }
+    }
+
+    checkSession();
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!authenticated) {
+      return;
+    }
+
     const url = String(process.env.NEXT_PUBLIC_MQTT_URL || "").trim();
     const username = String(process.env.NEXT_PUBLIC_MQTT_USER || "").trim();
     const password = String(process.env.NEXT_PUBLIC_MQTT_PASS || "").trim();
+
+    setBrokerState("CONNECTING");
 
     if (!url || !username || !password) {
       setBrokerState("CONFIG ERROR");
@@ -96,9 +135,67 @@ export default function FanPanel() {
     return () => {
       client.end(true);
     };
-  }, []);
+  }, [authenticated]);
+
+  async function handleLogin(event) {
+    event.preventDefault();
+    const trimmedKey = authKey.trim();
+    if (!trimmedKey) {
+      setAuthMessage("Please enter API key.");
+      return;
+    }
+
+    setAuthWorking(true);
+    setAuthMessage("");
+
+    try {
+      const response = await fetch("/api/auth/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ key: trimmedKey }),
+      });
+      const data = await response.json().catch(() => ({}));
+
+      if (!response.ok) {
+        throw new Error(data.message || "Login failed.");
+      }
+
+      setAuthenticated(true);
+      setAuthKey("");
+      setAuthMessage("");
+      setBrokerState("CONNECTING");
+      setMessage("");
+    } catch (error) {
+      setAuthMessage(error instanceof Error ? error.message : "Login failed.");
+    } finally {
+      setAuthWorking(false);
+    }
+  }
+
+  async function handleLogout() {
+    setAuthWorking(true);
+    setAuthMessage("");
+
+    try {
+      await fetch("/api/auth/logout", { method: "POST" });
+    } finally {
+      setAuthenticated(false);
+      setFanStatus("UNKNOWN");
+      setDeviceStatus("UNKNOWN");
+      setBrokerState("LOCKED");
+      setWorking(false);
+      setMessage("");
+      setAuthWorking(false);
+      setAuthMessage("Logged out.");
+    }
+  }
 
   async function sendCommand(cmd) {
+    if (!authenticated) {
+      setMessage("Please login first.");
+      return;
+    }
+
     setWorking(true);
     setMessage("");
 
@@ -120,6 +217,50 @@ export default function FanPanel() {
     } finally {
       setWorking(false);
     }
+  }
+
+  if (!sessionReady) {
+    return (
+      <section className="bank-grid">
+        <article className="bank-panel bank-panel--auth">
+          <p className="bank-panel-kicker">Session</p>
+          <h2>Checking session...</h2>
+          <p className="bank-panel-copy">Please wait.</p>
+        </article>
+      </section>
+    );
+  }
+
+  if (!authenticated) {
+    return (
+      <section className="bank-grid">
+        <article className="bank-panel bank-panel--auth">
+          <p className="bank-panel-kicker">Authentication</p>
+          <h2>Login Required</h2>
+          <p className="bank-panel-copy">Enter FAN API key to unlock the fan control panel.</p>
+
+          <form className="bank-form" onSubmit={handleLogin}>
+            <label htmlFor="fan-api-key">API Key</label>
+            <input
+              id="fan-api-key"
+              type="password"
+              autoComplete="current-password"
+              placeholder="Enter FAN_API_KEY"
+              value={authKey}
+              onChange={(event) => setAuthKey(event.target.value)}
+              required
+            />
+            <button type="submit" className="bank-button bank-button--primary" disabled={authWorking || !authKey.trim()}>
+              {authWorking ? "Signing in..." : "Login"}
+            </button>
+          </form>
+
+          <p className={`bank-message ${authMessage ? "is-visible" : ""}`} aria-live="polite" role="status">
+            {authMessage || "Session is required before sending commands."}
+          </p>
+        </article>
+      </section>
+    );
   }
 
   const fanStateClass = toFanStateClass(fanStatus);
@@ -157,8 +298,16 @@ export default function FanPanel() {
       </article>
 
       <article className="bank-panel">
-        <p className="bank-panel-kicker">Quick Control</p>
-        <h2>Command Center</h2>
+        <div className="bank-panel-head">
+          <div>
+            <p className="bank-panel-kicker">Quick Control</p>
+            <h2>Command Center</h2>
+          </div>
+          <button type="button" className="bank-button bank-button--ghost bank-button--compact" onClick={handleLogout} disabled={authWorking}>
+            {authWorking ? "Signing out..." : "Logout"}
+          </button>
+        </div>
+
         <p className="bank-panel-copy">
           Large touch targets for quick actions, including small screens like iPhone SE2.
         </p>
@@ -168,7 +317,7 @@ export default function FanPanel() {
             type="button"
             className="bank-button bank-button--on"
             onClick={() => sendCommand("ON")}
-            disabled={working}
+            disabled={working || authWorking}
           >
             Turn ON
           </button>
@@ -176,7 +325,7 @@ export default function FanPanel() {
             type="button"
             className="bank-button bank-button--off"
             onClick={() => sendCommand("OFF")}
-            disabled={working}
+            disabled={working || authWorking}
           >
             Turn OFF
           </button>
@@ -184,7 +333,7 @@ export default function FanPanel() {
             type="button"
             className="bank-button bank-button--primary"
             onClick={() => sendCommand("TOGGLE")}
-            disabled={working}
+            disabled={working || authWorking}
           >
             Toggle
           </button>

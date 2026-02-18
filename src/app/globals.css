@@ -162,6 +162,11 @@ body::after {
     0 18px 36px #02081366;
 }
 
+.bank-panel--auth {
+  max-width: 540px;
+  margin-inline: auto;
+}
+
 .bank-panel-kicker {
   margin: 0;
   color: #88a7c3;
@@ -173,6 +178,13 @@ body::after {
 .bank-panel h2 {
   margin: 0.48rem 0 0.6rem;
   font-size: 1.25rem;
+}
+
+.bank-panel-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.8rem;
 }
 
 .bank-panel-copy {
@@ -272,6 +284,13 @@ body::after {
 .bank-button--danger {
   background: linear-gradient(160deg, #9c2f2f 0%, #db6060 100%);
   border-color: #f99b9b42;
+}
+
+.bank-button--compact {
+  min-height: 36px;
+  padding: 0 0.85rem;
+  font-size: 0.8rem;
+  white-space: nowrap;
 }
 
 .bank-chip-row {
@@ -497,6 +516,15 @@ body::after {
   .bank-status-head {
     flex-direction: column;
     align-items: flex-start;
+  }
+
+  .bank-panel-head {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .bank-button--compact {
+    width: 100%;
   }
 }
 

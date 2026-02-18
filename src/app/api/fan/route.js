@@ -1,4 +1,5 @@
 import mqtt from "mqtt";
+import { hasApiKeyConfigured, isAuthenticatedRequest } from "@/lib/auth";
 
 export const runtime = "nodejs";
 
@@ -6,6 +7,10 @@ const MQTT_CONTROL_TOPIC = String(process.env.MQTT_CONTROL_TOPIC || "fan/control
 const COMMANDS = new Set(["ON", "OFF", "TOGGLE"]);
 const CONNECT_TIMEOUT_MS = 10000;
 const OPERATION_TIMEOUT_MS = 12000;
+
+function unauthorized(message = "Unauthorized") {
+  return Response.json({ ok: false, message }, { status: 401 });
+}
 
 function readConfig() {
   return {
@@ -28,6 +33,14 @@ function missingEnvResponse() {
 export async function POST(req) {
   const body = await req.json().catch(() => ({}));
   const command = String(body.cmd || "").trim().toUpperCase();
+
+  if (!hasApiKeyConfigured()) {
+    return unauthorized("Server missing FAN_API_KEY");
+  }
+
+  if (!isAuthenticatedRequest(req, body.key || "")) {
+    return unauthorized("Please login first");
+  }
 
   if (!COMMANDS.has(command)) {
     return Response.json(
@@ -93,7 +106,15 @@ export async function POST(req) {
   });
 }
 
-export async function GET() {
+export async function GET(req) {
+  if (!hasApiKeyConfigured()) {
+    return unauthorized("Server missing FAN_API_KEY");
+  }
+
+  if (!isAuthenticatedRequest(req)) {
+    return unauthorized("Please login first");
+  }
+
   const { url, username, password } = readConfig();
   if (!url || !username || !password) {
     return missingEnvResponse();
